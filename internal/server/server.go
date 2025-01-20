@@ -76,9 +76,11 @@ func (s *SignalingServer) HandleWebSocket(w http.ResponseWriter, r *http.Request
 		case "join":
 			s.handleJoinRoom(c, &msg)
 		case "leave":
-			s.handleLeaveRoom(c) //, &msg
+			s.handleLeaveRoom(c)
 		case "offer", "answer", "ice-candidate":
 			s.handleSignaling(c, &msg)
+		case "reconnect":
+			s.handleReconnect(c, &msg)
 		default:
 			log.Printf("Unknown message type: %s", msg.Type)
 		}
@@ -125,9 +127,26 @@ func (s *SignalingServer) handleJoinRoom(c *client.Client, msg *models.Message) 
 	}, c.ID)
 }
 
-// handleLeaveRoom processes a room leave request
-func (s *SignalingServer) handleLeaveRoom(c *client.Client) { // , msg *models.Message
-	s.handleClientDisconnect(c)
+// handleClientDisconnect processes a room unexpected disconnect
+func (s *SignalingServer) handleClientDisconnect(c *client.Client) { // , msg *models.Message
+	if c.Room == "" {
+		return
+	}
+
+	s.mu.Lock()
+	room, exists := s.rooms[c.Room]
+	if !exists {
+		s.mu.Unlock()
+		return
+	}
+
+	room.RemoveClient(c.ID)
+
+	// Remove room if empty
+	if room.IsEmpty() {
+		delete(s.rooms, c.Room)
+	}
+	s.mu.Unlock()
 }
 
 // handleSignaling routes WebRTC signaling messages between peers
@@ -156,8 +175,42 @@ func (s *SignalingServer) handleSignaling(c *client.Client, msg *models.Message)
 	targetClient.SendMessage(msg)
 }
 
-// handleClientDisconnect cleans up when a client disconnects
-func (s *SignalingServer) handleClientDisconnect(c *client.Client) {
+// handleReconnect processes a reconnect request
+func (s *SignalingServer) handleReconnect(c *client.Client, msg *models.Message) {
+	if msg.Room == "" {
+		log.Println("Room ID is required")
+		return
+	}
+
+	// Use getOrCreateRoom instead of just checking if room exists
+	room := s.getOrCreateRoom(msg.Room)
+
+	c.Room = msg.Room
+	room.AddClient(c)
+
+	// Get list of existing peers to send to the reconnecting client
+	peers := room.GetClients()
+
+	// Remove the reconnecting client from the peers list
+	for i, peer := range peers {
+		if peer == c.ID {
+			peers = append(peers[:i], peers[i+1:]...)
+			break
+		}
+	}
+
+	// Notify the reconnecting client about existing participants
+	reconnectResponse := models.Message{
+		Type:    "reconnect-peers",
+		From:    "server",
+		Room:    msg.Room,
+		Payload: json.RawMessage(`{"peers":` + marshal(peers) + `}`),
+	}
+	c.SendMessage(reconnectResponse)
+}
+
+// handleLeaveRoom cleans up when a client disconnects
+func (s *SignalingServer) handleLeaveRoom(c *client.Client) {
 	if c.Room == "" {
 		return
 	}
