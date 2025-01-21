@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -71,6 +72,10 @@ func (s *SignalingServer) HandleWebSocket(w http.ResponseWriter, r *http.Request
 			s.handleClientDisconnect(c)
 			return
 		}
+
+		// Add debug logging
+		log.Printf("Received WebSocket message from Frontend: Type=%s, Room=%s, From=%s, To=%s",
+			msg.Type, msg.Room, msg.From, msg.Target)
 
 		switch msg.Type {
 		case "join":
@@ -211,6 +216,7 @@ func (s *SignalingServer) handleReconnect(c *client.Client, msg *models.Message)
 
 // handleLeaveRoom cleans up when a client disconnects
 func (s *SignalingServer) handleLeaveRoom(c *client.Client) {
+	fmt.Println("Inside leave function")
 	if c.Room == "" {
 		return
 	}
